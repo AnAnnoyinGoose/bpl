@@ -1,6 +1,8 @@
 CC=cc
 CFLAGS=-Wall -Wextra -g
-TARGET=bpl
+TARGET=build/bpl
 SRC=./src/*
 default:
 	$(CC) -o $(TARGET) $(SRC) $(CFLAGS)
+clean:
+	rm -f $(TARGET)
