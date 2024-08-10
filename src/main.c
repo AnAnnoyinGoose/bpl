@@ -5,9 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-const char *PROGRAM[] = {
-    "@x uint8 9",          "@y uint8 60",     "@z uint8 $ add @^x @^y",
-    "@.str str \"hello\"", "call putl @.str", "call putl @^z"};
+const char *PROGRAM[] = {"@x uint8 9",
+                         "@y uint8 60",
+                         "@z uint8 $ addu8 @^x @^y",
+                         "@.str str \"Hello, World\"",
+                         "call putl @.str",
+                         "call putl @^z"};
 
 typedef enum VariableDataType {
   _VDT_uint8,
@@ -251,11 +254,13 @@ void destroyReturn(_R *r) {
 }
 
 void setReturnData(_R *r, void *data) {
-  r->data = malloc(r->size);
-  memcpy(r->data, data, r->size);
+  if (r->data != NULL)
+    free(r->data);
+  r->data = data;
+  printf("Setting return data %d\n", *(uint8_t *)r->data);
 }
 
-typedef _R (*_FCB)(_AL *al);
+typedef _R *(*_FCB)(_AL *al);
 
 typedef struct FunctionCall {
   char *name;
@@ -267,36 +272,56 @@ typedef struct FunctionCall {
   _FCB func;
 } _FC;
 
-
-
-
-static _R _std_clb_putl(_AL *al) {
-  
-  // check the arg dataType
+static _R *_std_clb_putl(_AL *al) {
   for (int i = 0; i < al->size; i++) {
-    if (al->args[i]->args->dataType == _VDT_void) {
-      return *createReturn(_VDT_void, 0, "putl");
-    }
     if (al->args[i]->args->dataType == _VDT_str) {
       printf("%s\n", (char *)al->args[i]->args->data);
-      return *createReturn(_VDT_void, 0, "putl");
     }
     if (al->args[i]->args->dataType == _VDT_uint8) {
       printf("%d\n", *(uint8_t *)al->args[i]->args->data);
-      return *createReturn(_VDT_void, 0, "putl");
     }
     if (al->args[i]->args->dataType == _VDT_uint32) {
       printf("%d\n", *(uint32_t *)al->args[i]->args->data);
-      return *createReturn(_VDT_void, 0, "putl");
     }
   }
-  return *createReturn(_VDT_void, 0, "putl");  
+  return createReturn(_VDT_void, 0, "putl");
 }
 
+static _R *_std_clb_add(_AL *al) {
+  // can be either uint8 or uint32
+  uint32_t ret = 0;
+  _R *r = NULL;
+  for (int i = 0; i < al->size; i++) {
+    if (al->args[i]->args->dataType == _VDT_uint8) {
+      ret += *(uint8_t *)al->args[i]->args->data;
+    }
+    if (al->args[i]->args->dataType == _VDT_uint32) {
+      ret += *(uint32_t *)al->args[i]->args->data;
+    }
+    printf("%d\n", ret);
+  }
+  if (al->args[0]->args->dataType == _VDT_uint8) {
+    r = createReturn(_VDT_uint8, 0, "addu8");
+  } else if (al->args[0]->args->dataType == _VDT_uint32) {
+    r = createReturn(_VDT_uint32, 0, "addu32");
+  }
 
+  setReturnData(r, &ret);
+  printf("Returning %d\n", *(int *)r->data);
+  return r;
+}
 
 static _FC STD_FUNCS[] = {
-    {"putl", {_VDT_any}, 1, 0, _VDT_void, 0, 0, &_std_clb_putl},
+    {"putl", {_VDT_any}, 1, 0, _VDT_void, 0, 0, _std_clb_putl},
+    {"addu8", {_VDT_uint8, _VDT_uint8}, 2, 0, _VDT_uint8, 0, 0, _std_clb_add},
+    {"addu32",
+     {_VDT_uint32, _VDT_uint32},
+     2,
+     0,
+     _VDT_uint32,
+     0,
+     0,
+     _std_clb_add},
 };
 static _FC *getStdFunc(const char *name) {
   for (int i = 0; i < sizeof(STD_FUNCS) / sizeof(_FC); i++)
@@ -342,6 +367,44 @@ _FC *getFunction(_FS *fs, const char *name) {
 
 void setFunctionCall(_FC *f, _FCB c) { f->func = c; }
 
+_R *evalrhs(const char *line, _VS *vs, _FS *fs) {
+  // add @^x @^y
+  int n;
+  char **tokens = splitBySpaces(line, &n);
+  _FC *f = getFunction(fs, tokens[0]);
+  if (f == NULL) {
+    f = getStdFunc(tokens[0]);
+    if (f == NULL) {
+      printf("Function %s not found\n", tokens[0]);
+      freeTokens(tokens, n);
+      return createReturn(_VDT_void, 0, "evalrhs");
+    }
+  }
+  printf("Evaluating function %s\n", f->name);
+  _AL al = {0};
+  int readOnly = 0;
+  for (int i = 1; i < n; i++) {
+    char *varName = tokens[i] + 1;
+    if (strcmp(varName, "^") == 0) {
+      readOnly = 1;
+    }
+    _V *v = getVariable(vs, varName + 1);
+    if (v == NULL) {
+      printf("Variable %s not found\n", varName);
+      freeTokens(tokens, n);
+      return createReturn(_VDT_void, 0, "evalrhs");
+    }
+    _A *a = createArg(v, f->nArgs, readOnly);
+    addArg(&al, a);
+  }
+  if (f->func != NULL) {
+    return f->func(&al);
+  }
+
+  freeTokens(tokens, n);
+  return createReturn(_VDT_void, 0, "evalrhs");
+}
+
 void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
   size_t len = strlen(line);
   int n;
@@ -351,6 +414,39 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
     printf("Parsing variable definition %s\n", line);
     _VDT t = getVariableDataType(tokens[1]);
     _V *v = createVariable(_VT_var, t, NULL, tokens[0] + 1);
+
+    if (tokens[2][0] == '$') {
+      // means to eval the right hand side
+      size_t start = strchr(line, '$') - line + 2;
+      size_t end = strlen(line) - start;
+      char *rhs = (char *)malloc(end + 1);
+      strncpy(rhs, line + start, end);
+      rhs[end] = '\0'; // Null-terminate the string
+      printf("Evaluating right hand side: %s\n", rhs);
+
+      const _R *r = evalrhs(rhs, vs, fs);
+      if (r->type == _VDT_uint32) {
+        v->data = malloc(sizeof(uint32_t));
+        memset(v->data, *(uint32_t *)r->data, sizeof(uint32_t));
+      }
+      if (r->type == _VDT_uint8) {
+        v->data = malloc(sizeof(uint8_t));
+        memset(v->data, *(uint8_t *)r->data, sizeof(uint8_t));
+        printf("uint8 %d\n", *(uint8_t *)r->data);
+      }
+      if (r->type == _VDT_str) {
+        v->data = malloc(sizeof(char));
+        memset(v->data, *(char *)r->data, sizeof(char));
+      }
+      if (r->type == _VDT_bool) {
+        v->data = malloc(sizeof(uint8_t));
+        memset(v->data, *(uint8_t *)r->data, sizeof(uint8_t));
+      }
+
+      addVariable(vs, v);
+      return;
+    }
+
     switch (t) {
     case _VDT_uint8:
       v->data = malloc(sizeof(uint8_t));
@@ -360,10 +456,23 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
       v->data = malloc(sizeof(uint32_t));
       memset(v->data, atoi(tokens[2]), sizeof(uint32_t));
       break;
-    case _VDT_str:
-      v->data = malloc(sizeof(char) * (len - 2));
-      strcpy(v->data, tokens[2]);
+    case _VDT_str: {
+      char *start = strchr(line, '"');
+      char *end = strrchr(line, '"');
+
+      if (start != NULL && end != NULL && start < end) {
+        size_t length = end - start - 1;
+        char *str_value = (char *)malloc(length + 1);
+        strncpy(str_value, start + 1, length);
+        str_value[length] = '\0'; // Null-terminate the string
+
+        v->data = str_value;
+      } else {
+        printf("Invalid string format in line: %s\n", line);
+      }
       break;
+    }
+
     case _VDT_bool:
       v->data = malloc(sizeof(uint8_t));
       *(uint8_t *)(v->data) = 0;
@@ -416,7 +525,7 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
       }
       if (f->args[i] != _VDT_any) {
         if (f->args[i] != v->dataType) {
-          printf("Variable %s has type %d, expected %d\n", arg, v->dataType,
+          printf("Arg %s has type %d, expected %d\n", arg, v->dataType,
                  f->args[i]);
           freeTokens(tokens, n);
           return;
@@ -429,21 +538,18 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
       _A *a = createArg(v, n - 2, readOnly);
       addArg(al, a);
     }
-    
+
     _FCB c = f->func;
-    _R ret = c(al);
+    _R ret = *c(al);
 
     if (ret.data != NULL) {
       printf("Return value: %d\n", *(uint32_t *)ret.data);
     }
 
-
-
     freeTokens(tokens, n);
     return;
   }
   freeTokens(tokens, n);
-  // call putl @^z
   return;
 }
 
