@@ -182,6 +182,81 @@ char **splitBySpaces(const char *str, int *n) {
 
 void freeTokens(char **tokens, int n) { free(tokens); }
 
+typedef struct Arg {
+  _V *args;
+  int readOnly;
+  int nArgs;
+} _A;
+
+_A *createArg(_V *v, int nArgs, int readOnly) {
+  _A *a = malloc(sizeof(_A));
+  a->args = v;
+  a->nArgs = nArgs;
+  a->readOnly = readOnly;
+  return a;
+}
+
+void destroyArg(_A *a) {
+  free(a->args);
+  free(a);
+}
+
+typedef struct ArgList {
+  _A **args;
+  int size;
+} _AL;
+
+_AL *createArgList() {
+  _AL *al = malloc(sizeof(_AL));
+  al->args = malloc(sizeof(_A *));
+  al->size = 0;
+  return al;
+}
+
+void destroyArgList(_AL *al) {
+  for (int i = 0; i < al->size; i++) {
+    destroyArg(al->args[i]);
+  }
+  free(al->args);
+  free(al);
+}
+
+void addArg(_AL *al, _A *a) {
+  printf("Adding arg %s\n", a->args->name);
+  al->args = realloc(al->args, (al->size + 1) * sizeof(_A *));
+  al->args[al->size] = a;
+  al->size++;
+}
+
+typedef struct Return {
+  _VDT type;
+  int size;
+  char *origin;
+  void *data;
+} _R;
+
+_R *createReturn(_VDT type, int size, char *origin) {
+  _R *r = malloc(sizeof(_R));
+  r->type = type;
+  r->size = size;
+  r->origin = origin;
+  r->data = NULL;
+  return r;
+}
+
+void destroyReturn(_R *r) {
+  if (r->data != NULL)
+    free(r->data);
+  free(r);
+}
+
+void setReturnData(_R *r, void *data) {
+  r->data = malloc(r->size);
+  memcpy(r->data, data, r->size);
+}
+
+typedef _R (*_FCB)(_AL *al);
+
 typedef struct FunctionCall {
   char *name;
   _VDT args[100];
@@ -189,10 +264,39 @@ typedef struct FunctionCall {
   int retSize;
   _VDT retType;
   int startIdx, endIdx;
+  _FCB func;
 } _FC;
 
+
+
+
+static _R _std_clb_putl(_AL *al) {
+  
+  // check the arg dataType
+  for (int i = 0; i < al->size; i++) {
+    if (al->args[i]->args->dataType == _VDT_void) {
+      return *createReturn(_VDT_void, 0, "putl");
+    }
+    if (al->args[i]->args->dataType == _VDT_str) {
+      printf("%s\n", (char *)al->args[i]->args->data);
+      return *createReturn(_VDT_void, 0, "putl");
+    }
+    if (al->args[i]->args->dataType == _VDT_uint8) {
+      printf("%d\n", *(uint8_t *)al->args[i]->args->data);
+      return *createReturn(_VDT_void, 0, "putl");
+    }
+    if (al->args[i]->args->dataType == _VDT_uint32) {
+      printf("%d\n", *(uint32_t *)al->args[i]->args->data);
+      return *createReturn(_VDT_void, 0, "putl");
+    }
+  }
+  return *createReturn(_VDT_void, 0, "putl");  
+}
+
+
+
 static _FC STD_FUNCS[] = {
-    {"putl", {_VDT_any}, 1, 0, _VDT_void, 0, 0},
+    {"putl", {_VDT_any}, 1, 0, _VDT_void, 0, 0, &_std_clb_putl},
 };
 static _FC *getStdFunc(const char *name) {
   for (int i = 0; i < sizeof(STD_FUNCS) / sizeof(_FC); i++)
@@ -235,6 +339,8 @@ _FC *getFunction(_FS *fs, const char *name) {
   }
   return NULL;
 }
+
+void setFunctionCall(_FC *f, _FCB c) { f->func = c; }
 
 void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
   size_t len = strlen(line);
@@ -288,6 +394,7 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
       freeTokens(tokens, n);
       return;
     }
+    _AL *al = createArgList();
     for (int i = 0; i < f->nArgs; i++) {
       int readOnly = 0;
       char *arg = tokens[i + 2];
@@ -318,10 +425,20 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
 
       if (readOnly) {
         printf("Variable %s is read-only\n", arg);
-        freeTokens(tokens, n);
-        return;
       }
+      _A *a = createArg(v, n - 2, readOnly);
+      addArg(al, a);
     }
+    
+    _FCB c = f->func;
+    _R ret = c(al);
+
+    if (ret.data != NULL) {
+      printf("Return value: %d\n", *(uint32_t *)ret.data);
+    }
+
+
+
     freeTokens(tokens, n);
     return;
   }
