@@ -9,8 +9,16 @@ const char *PROGRAM[] = {"@x uint8 9",
                          "@y uint8 60",
                          "@z uint8 $ addu8 @^x @^y",
                          "@.str str \"Hello, World\"",
-                         "call putl @.str",
+                         "@cat str $ concat @^.str \\s @^z",
+                         "call putl @cat",
                          "call putl @^z"};
+
+#define Dlog(...)
+#ifdef DEBUG
+
+#define Dlog(...) printf(__VA_ARGS__)
+
+#endif /* ifdef DEBUG */
 
 typedef enum VariableDataType {
   _VDT_uint8,
@@ -47,7 +55,7 @@ typedef struct Variable {
 } _V;
 
 _V *createVariable(_VT type, _VDT dataType, _UDT *udt, const char *name) {
-  printf("Creating variable %s\n", name);
+  Dlog("Creating variable %s\n", name);
   _V *v = malloc(sizeof(_V));
   v->type = type;
   v->dataType = dataType;
@@ -72,7 +80,7 @@ typedef struct VariableStack {
 } _VS;
 
 _VS *createVariableStack() {
-  printf("Creating variable stack\n");
+  Dlog("Creating variable stack\n");
   _VS *vs = malloc(sizeof(_VS));
   vs->vars = NULL;
   vs->size = 0;
@@ -88,7 +96,7 @@ void destroyVariableStack(_VS *vs) {
 }
 
 void addVariable(_VS *vs, _V *v) {
-  printf("Adding variable %s\n", v->name);
+  Dlog("Adding variable %s\n", v->name);
   if (vs->vars != NULL) {
     vs->vars = realloc(vs->vars, (vs->size + 1) * sizeof(_V *));
     vs->vars[vs->size] = v;
@@ -109,20 +117,20 @@ _V *getVariable(_VS *vs, const char *name) {
   return NULL;
 }
 void printVariables(_VS *vs) {
-  printf("Printing variables %d\n", vs->size);
+  Dlog("Printing variables %d\n", vs->size);
   for (int i = 0; i < vs->size; i++) {
     if (vs->vars[i]->data != NULL) {
       if (vs->vars[i]->dataType == _VDT_uint8)
-        printf("\t%s: %d\n", vs->vars[i]->name, *(int *)vs->vars[i]->data);
+        Dlog("\t%s: %d\n", vs->vars[i]->name, *(int *)vs->vars[i]->data);
       else if (vs->vars[i]->dataType == _VDT_uint32)
-        printf("\t%s: %d\n", vs->vars[i]->name, *(int *)vs->vars[i]->data);
+        Dlog("\t%s: %d\n", vs->vars[i]->name, *(int *)vs->vars[i]->data);
       else if (vs->vars[i]->dataType == _VDT_str)
-        printf("\t%s: %s\n", vs->vars[i]->name, vs->vars[i]->data);
+        Dlog("\t%s: %s\n", vs->vars[i]->name, vs->vars[i]->data);
       else if (vs->vars[i]->dataType == _VDT_bool)
-        printf("\t%s: %d\n", vs->vars[i]->name,
-               *(uint8_t *)vs->vars[i]->data ? 1 : 0);
+        Dlog("\t%s: %d\n", vs->vars[i]->name,
+             *(uint8_t *)vs->vars[i]->data ? 1 : 0);
     } else
-      printf("\t%s: NULL\n", vs->vars[i]->name);
+      Dlog("\t%s: NULL\n", vs->vars[i]->name);
   }
 }
 
@@ -167,7 +175,7 @@ _VDT getVariableDataType(const char *name) {
 }
 
 char **splitBySpaces(const char *str, int *n) {
-  printf("Splitting by spaces %s\n", str);
+  Dlog("Splitting by spaces %s\n", str);
   char *cpy = strdup(str);
   char *token = strtok(cpy, " ");
 
@@ -225,7 +233,7 @@ void destroyArgList(_AL *al) {
 }
 
 void addArg(_AL *al, _A *a) {
-  printf("Adding arg %s\n", a->args->name);
+  Dlog("Adding arg %s\n", a->args->name);
   al->args = realloc(al->args, (al->size + 1) * sizeof(_A *));
   al->args[al->size] = a;
   al->size++;
@@ -256,8 +264,10 @@ void destroyReturn(_R *r) {
 void setReturnData(_R *r, void *data) {
   if (r->data != NULL)
     free(r->data);
-  r->data = data;
-  printf("Setting return data %d\n", *(uint8_t *)r->data);
+  printf("Setting return data %s\n", r->origin);
+  printf("Size of data %d\n", r->size);
+  r->data = malloc(r->size);
+  memcpy(r->data, data, r->size);
 }
 
 typedef _R *(*_FCB)(_AL *al);
@@ -298,16 +308,41 @@ static _R *_std_clb_add(_AL *al) {
     if (al->args[i]->args->dataType == _VDT_uint32) {
       ret += *(uint32_t *)al->args[i]->args->data;
     }
-    printf("%d\n", ret);
+    Dlog("%d\n", ret);
   }
   if (al->args[0]->args->dataType == _VDT_uint8) {
-    r = createReturn(_VDT_uint8, 0, "addu8");
+    r = createReturn(_VDT_uint8, sizeof(uint8_t), "addu8");
   } else if (al->args[0]->args->dataType == _VDT_uint32) {
-    r = createReturn(_VDT_uint32, 0, "addu32");
+    r = createReturn(_VDT_uint32, sizeof(uint32_t), "addu32");
   }
 
   setReturnData(r, &ret);
-  printf("Returning %d\n", *(int *)r->data);
+  Dlog("Returning %d\n", *(int *)r->data);
+  return r;
+}
+
+static char *intoStr(int i) {
+  char *ret = malloc(sizeof(char) * 10);
+  sprintf(ret, "%d", i);
+  return ret;
+}
+
+static _R *_std_clb_concat(_AL *al) {
+  char *ret = malloc(sizeof(char) * 100);
+  for (int i = 0; i < al->size; i++) {
+    if (al->args[i]->args->data == NULL) {
+      Dlog("Data is NULL\n");
+      return createReturn(_VDT_void, 0, "concat");
+    }
+    if (al->args[i]->args->dataType != _VDT_str) {
+      strcat(ret, intoStr(*(int *)al->args[i]->args->data));
+    } else {
+      strcat(ret, (char *)al->args[i]->args->data);
+    }
+  }
+
+  _R *r = createReturn(_VDT_str, strlen(ret), "concat");
+  setReturnData(r, ret);
   return r;
 }
 
@@ -322,6 +357,8 @@ static _FC STD_FUNCS[] = {
      0,
      0,
      _std_clb_add},
+    // concat will accept n*_VDT_any and cast to _VDT_str
+    {"concat", {_VDT_any}, -1, 0, _VDT_str, 0, 0, _std_clb_concat},
 };
 static _FC *getStdFunc(const char *name) {
   for (int i = 0; i < sizeof(STD_FUNCS) / sizeof(_FC); i++)
@@ -335,7 +372,7 @@ typedef struct FunctionStack {
 } _FS;
 
 _FS *createFunctionStack() {
-  printf("Creating function stack\n");
+  Dlog("Creating function stack\n");
   _FS *fs = malloc(sizeof(_FS));
   fs->funcs = NULL;
   fs->size = 0;
@@ -348,7 +385,7 @@ void destroyFunctionStack(_FS *fs) {
 }
 
 void addFunction(_FS *fs, _FC *f) {
-  printf("Adding function %s\n", f->name);
+  Dlog("Adding function %s\n", f->name);
   if (fs->funcs != NULL) {
     fs->funcs = realloc(fs->funcs, (fs->size + 1) * sizeof(_FC));
     fs->funcs[fs->size] = *f;
@@ -375,22 +412,35 @@ _R *evalrhs(const char *line, _VS *vs, _FS *fs) {
   if (f == NULL) {
     f = getStdFunc(tokens[0]);
     if (f == NULL) {
-      printf("Function %s not found\n", tokens[0]);
+      Dlog("Function %s not found\n", tokens[0]);
       freeTokens(tokens, n);
       return createReturn(_VDT_void, 0, "evalrhs");
     }
   }
-  printf("Evaluating function %s\n", f->name);
+  Dlog("Evaluating function %s\n", f->name);
   _AL al = {0};
   int readOnly = 0;
   for (int i = 1; i < n; i++) {
     char *varName = tokens[i] + 1;
+    if (strcmp(tokens[i], "\\s") == 0) {
+      // create a str arg with a space
+      char *str = malloc(sizeof(char) * 2);
+      str[0] = ' ';
+      str[1] = '\0';
+      _V *v = createVariable(_VT_const, _VDT_str, NULL, "TEMP_SPACE");
+      v->data = malloc(sizeof(char) * 2);
+      memcpy(v->data, str, 2);
+      _A *a = createArg(v, f->nArgs, readOnly);
+      addArg(&al, a);
+      continue;
+    }
+
     if (strcmp(varName, "^") == 0) {
       readOnly = 1;
     }
     _V *v = getVariable(vs, varName + 1);
     if (v == NULL) {
-      printf("Variable %s not found\n", varName);
+      Dlog("Variable %s not found\n", varName);
       freeTokens(tokens, n);
       return createReturn(_VDT_void, 0, "evalrhs");
     }
@@ -411,7 +461,7 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
   char **tokens = splitBySpaces(line, &n);
   _IT it = parseInstrType(line);
   if (it == _IT_varDef) {
-    printf("Parsing variable definition %s\n", line);
+    Dlog("Parsing variable definition %s\n", line);
     _VDT t = getVariableDataType(tokens[1]);
     _V *v = createVariable(_VT_var, t, NULL, tokens[0] + 1);
 
@@ -422,25 +472,28 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
       char *rhs = (char *)malloc(end + 1);
       strncpy(rhs, line + start, end);
       rhs[end] = '\0'; // Null-terminate the string
-      printf("Evaluating right hand side: %s\n", rhs);
+      Dlog("Evaluating right hand side: %s\n", rhs);
 
       const _R *r = evalrhs(rhs, vs, fs);
       if (r->type == _VDT_uint32) {
         v->data = malloc(sizeof(uint32_t));
         memset(v->data, *(uint32_t *)r->data, sizeof(uint32_t));
+        Dlog("uint32 %d\n", *(uint32_t *)r->data);
       }
       if (r->type == _VDT_uint8) {
         v->data = malloc(sizeof(uint8_t));
         memset(v->data, *(uint8_t *)r->data, sizeof(uint8_t));
-        printf("uint8 %d\n", *(uint8_t *)r->data);
+        Dlog("uint8 %d\n", *(uint8_t *)r->data);
       }
       if (r->type == _VDT_str) {
         v->data = malloc(sizeof(char));
-        memset(v->data, *(char *)r->data, sizeof(char));
+        memcpy(v->data, (char *)r->data, r->size * sizeof(char));
+        Dlog("str %s\n", (char *)r->data);
       }
       if (r->type == _VDT_bool) {
         v->data = malloc(sizeof(uint8_t));
         memset(v->data, *(uint8_t *)r->data, sizeof(uint8_t));
+        Dlog("bool %d\n", *(uint8_t *)r->data);
       }
 
       addVariable(vs, v);
@@ -468,7 +521,7 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
 
         v->data = str_value;
       } else {
-        printf("Invalid string format in line: %s\n", line);
+        Dlog("Invalid string format in line: %s\n", line);
       }
       break;
     }
@@ -478,7 +531,7 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
       *(uint8_t *)(v->data) = 0;
       break;
     default:
-      printf("Unknown data type %s\n", tokens[1]);
+      Dlog("Unknown data type %s\n", tokens[1]);
       break;
     }
     addVariable(vs, v);
@@ -486,26 +539,44 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
     freeTokens(tokens, n);
     return;
   } else if (it == _IT_funcCall) {
-    printf("Parsing function call %s\n", line);
+    Dlog("Parsing function call %s\n", line);
     char **tokens = splitBySpaces(line, &n);
     _FC *f = getStdFunc(tokens[1]);
     if (f == NULL) {
       f = getFunction(fs, tokens[1]);
     }
     if (f == NULL) {
-      printf("Function %s not found\n", tokens[1]);
+      Dlog("Function %s not found\n", tokens[1]);
       freeTokens(tokens, n);
       return;
     }
-    if (f->nArgs != n - 2) {
-      printf("Function %s expects %d arguments, got %d\n", tokens[1], f->nArgs,
-             n - 2);
+    if (f->nArgs != n - 2 && f->nArgs != -1) { // -1 means variadic
+      Dlog("Function %s expects %d arguments, got %d\n", tokens[1], f->nArgs,
+           n - 2);
       freeTokens(tokens, n);
       return;
     }
     _AL *al = createArgList();
+    int readOnly = 0;
+    if (f->nArgs == -1) {
+      for (int i = 0; i < n - 2; i++) {
+        char *arg = tokens[i + 2];
+        arg = arg + 1;
+        if (arg[0] == '^') {
+          arg = arg + 1;
+        }
+        _V *v = getVariable(vs, arg);
+        if (v == NULL) {
+          Dlog("Variable %s not found\n", arg);
+          printVariables(vs);
+          freeTokens(tokens, n);
+          return;
+        }
+        _A *a = createArg(v, f->nArgs, 0);
+        addArg(al, a);
+      }
+    }
     for (int i = 0; i < f->nArgs; i++) {
-      int readOnly = 0;
       char *arg = tokens[i + 2];
       arg = arg + 1;
 
@@ -513,27 +584,27 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
         readOnly = 1;
         arg = arg + 1;
       }
-      printf("Parsing argument %s\n", arg);
+      Dlog("Parsing argument %s\n", arg);
 
       _V *v = getVariable(vs, arg);
 
       if (v == NULL) {
-        printf("Variable %s not found\n", arg);
+        Dlog("Variable %s not found\n", arg);
         printVariables(vs);
         freeTokens(tokens, n);
         return;
       }
       if (f->args[i] != _VDT_any) {
         if (f->args[i] != v->dataType) {
-          printf("Arg %s has type %d, expected %d\n", arg, v->dataType,
-                 f->args[i]);
+          Dlog("Arg %s has type %d, expected %d\n", arg, v->dataType,
+               f->args[i]);
           freeTokens(tokens, n);
           return;
         }
       }
 
       if (readOnly) {
-        printf("Variable %s is read-only\n", arg);
+        Dlog("Variable %s is read-only\n", arg);
       }
       _A *a = createArg(v, n - 2, readOnly);
       addArg(al, a);
@@ -543,7 +614,7 @@ void parse(const char *line, int *ret, _VS *vs, _FS *fs) {
     _R ret = *c(al);
 
     if (ret.data != NULL) {
-      printf("Return value: %d\n", *(uint32_t *)ret.data);
+      Dlog("Return value: %d\n", *(uint32_t *)ret.data);
     }
 
     freeTokens(tokens, n);
@@ -562,9 +633,9 @@ int main(void) {
   _FS *fs = createFunctionStack();
 
   for (int i = 0; i < size; i++) {
-    printf("%s\n", PROGRAM[i]);
+    Dlog("%s\n", PROGRAM[i]);
     parse(PROGRAM[i], ret, vs, fs);
-    printf("\n");
+    Dlog("\n");
   }
 
   return 0;
