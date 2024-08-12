@@ -1,13 +1,8 @@
 CC=cc
-CFLAGS=-Wall -Wextra
+CFLAGS=-Wall -Wextra -g
 TARGET=build/bpl
 SRC=./src/*
-DFLAGS=-DDEBUG -g
-debug:
-	$(CC) -o $(TARGET) $(SRC) $(CFLAGS) $(DFLAGS)
-
-release:
+default:
 	$(CC) -o $(TARGET) $(SRC) $(CFLAGS)
-
 clean:
 	rm -f $(TARGET)
